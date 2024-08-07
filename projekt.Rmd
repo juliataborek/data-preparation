@@ -1,0 +1,1256 @@
+---
+title: "Przygotowanie danych - projekt"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: hide
+---
+
+## Cel badania
+Celem badania jest przeprowadzenie analizy skupień piw na podstawie ich cech fizykochemicznych i parametrów technologicznych, takich jak gęstość początkowa, gęstość końcowa, zawartość alkoholu, jednostki goryczy oraz inne istotne zmienne. Analiza ma na celu identyfikację grup podobnych piw, co pozwoli na klasyfikację i lepsze zrozumienie różnic między różnymi stylami piw. Badanie ma także na celu sprawdzenie, czy możliwe jest wyodrębnienie dwóch skupień, które odzwierciedlają różnice między piwami górnej fermentacji i niskiej fermentacji (podstawowa klasyfikacja piw), oraz czy wszystkie piwa danego stylu trafiają do jednego skupienia, czy są rozrzucone między różnymi grupami.
+
+## Załadowanie bibliotek oraz danych
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(car)
+library("VIM")
+library(readxl)
+library(stringr)
+library(VIM)
+library(EnvStats)
+```
+
+Kontekst:
+* recipesData.csv – zawiera podstawowe dane dotyczące przepisów na piwo zgłaszanych przez 
+użytkownika, które zostały zaciągnięte z serwisu Brewer's Friend (serwis umożliwia użytkownikom 
+dzielenie się swoimi przepisami na domowe piwo). 
+* styleData.scv – dane z identyfikatorami stylu. 
+
+```{r}
+recipe <- read.csv("recipeData.csv")
+style <- read.csv("styleData.csv")
+head(recipe)
+head(style)
+```
+
+## Opis zmiennych 
+### SKALE POMIAROWE 
+**Skala nominalna**
+* Name - Nazwa przepisu na piwo
+* URL - Adres URL, który identyfikuje stronę z przepisem, 
+* Style - Rodzaj warzenia
+* StyleID - Numer ID naparu
+* SugarScale - Skala służąca do określenia stężenia rozpuszczonych substancji stałych w brzeczce (Plato / Specific Gravity)
+* BrewMethod - Technika warzenia
+* PrimingMethod - Metoda primingu (dodawania cukru lub ekstraktu słodowego podczas butelkowania)
+* UserId - ID użytkownika
+
+**Skala porządkowa**
+Brak zmiennych
+
+**Skala przedziałowa**
+* Color - Standardowa metoda referencyjna – jasny do ciemnego, np. 40 = czarny
+* PrimaryTemp - Temperatura na etapie fermentacji (C)
+
+**Skala ilorazowa**
+* Size.L. - Ilość zaparzona według podanego przepisu (l)
+* OG - Gęstość brzeczki nastawnej (przed rozpoczęciem fermentacji) wyrażona za pomocą gęstości względnej (SG) (ang. Original Gravity - gęstość początkowa)
+* FG - Gęstość brzeczki po zakończonej fermentacji wyrażona za pomocą gęstości względnej (SG) (ang. Final Gravity - gęstość końcowa)
+* ABV - Ilość alkoholu w piwie określona jako procent objętości (ang. Alcohol by Volume)
+* IBU - Międzynarodowa jednostka goryczy
+* BoilSize - Ilość płynu na początku gotowania (l)
+* BoilTime - Czas gotowania (min)
+* BoilGravity - Ciężar właściwy brzeczki przed zagotowaniem (SG)
+* Efficiency - Wydajność ekstrakcji cukrów (%)
+* MashThickness - Ilość wody na funt ziarna
+* PitchRate - Drożdże dodane do fermentora na jednostkę ciężaru – milion komórek/ml brzeczki /stopień Plato
+
+Zamiana zmiennych nominalnych na factor:
+* Name - Nazwa piwa
+* URL - Adres URL, który identyfikuje stronę z przepisem, 
+* Style - Rodzaj warzenia
+* StyleID - Numer ID naparu
+* SugarScale - Skala do określenia stężenia rozpuszczonych substancji stałych w brzeczce
+* BrewMethod - Technika warzenia
+* PrimingMethod - Metoda primingu (dodawania cukru lub ekstraktu słodowego podczas butelkowania)
+* PrimingAmount - ilość użytego cukru
+```{r}
+recipe <- recipe %>%
+  mutate(across(c(Name,URL,Style,StyleID,SugarScale,BrewMethod,PrimingMethod), as.factor))
+```
+
+
+### ZMIENNE OKREŚLONE NA SKALI NOMINALNEJ 
+*Name - Nazwa piwa*
+```{r}
+# usunięcie spacji z początku i końca nazwy
+recipe$Name <- trimws(recipe$Name)
+any(duplicated(recipe$Name))
+n_distinct(recipe$Name)
+```
+Nazwy przepisów na piwo powtarzają się. W zbiorze istnieje 59141 unikalnych nazw.
+
+```{r}
+# tablica częstości
+tablica_czestosci_name <- table(recipe$Name)
+
+# 10 najczesciej wystepujacych nazw
+top10name <- head(sort(tablica_czestosci_name[tablica_czestosci_name > 1], decreasing = TRUE),10)
+top10name
+```
+Najczęściej występujące nazwy to Awesome Recipe, IPA i Saison. 
+
+Czwarta najpopularniejsza nazwa piwa odpowiada rodzajowi Kölsch.
+Postanowiono zamienić wartość "K\xf6lsch" na poprawną w kolumnach z nazwą, stylem oraz adresem URL.
+```{r}
+recipe$Name <- str_replace_all(recipe$Name, fixed('K\xf6lsch'), 'Kölsch')
+recipe$Style <- str_replace_all(recipe$Style, fixed('K\xf6lsch'), 'Kölsch')
+recipe$URL <- str_replace_all(recipe$URL, fixed('K\xf6lsch'), 'Kölsch')
+style$Style <- str_replace_all(style$Style, fixed('K\xf6lsch'), 'Kölsch')
+```
+
+Następnie utworzono wykres prezentujący 10 najczęściej występujących nazw przepisów:
+
+```{r}
+top10name_df <- as.data.frame(top10name)
+top10name_df$Var1 <- str_replace_all(top10name_df$Var1, fixed('K\xf6lsch'), 'Kölsch')
+ggplot(top10name_df, aes(x = reorder(Var1,Freq), y = Freq)) +
+  geom_bar(stat = "identity", fill = "goldenrod2") +
+  coord_flip() +  
+  labs(x = "Nazwa przepisu", y = "Liczba wystąpień", title = "10 najczęściej występujących nazw przepisów") +
+  theme_minimal()
+```
+Zauważono, że w wielu nazwach przepisów występują znaki zapytania.
+```{r}
+filtered_name <- recipe %>%
+  filter(str_detect(Name, "\\?"))
+head(filtered_name$Name)
+```
+Postanowiono zamienić nazwy z samymi znakami zapytania na wartość "N/A".
+
+Następnie usunięto znaki zapytania, które znajdowały się na końcu oraz na początku nazwy, aby uczynić je bardziej czytelne. Dodatkowo znaki zapytania znajdujące się między literami zastąpiono spacją.
+```{r}
+# zastapienie wartosci skladajacych sie tylko z ? i spacji "NA"
+recipe$Name <- str_replace(recipe$Name, "^[\\?\\s]+$", "N/A")
+# usunięcie ? z konca i poczatku nazwy
+recipe$Name <- str_replace_all(recipe$Name, "^\\?+|\\?+$", "")
+# Zamiana znaku zapytania na spacje, jeśli jest otoczony literami
+recipe$Name <- str_replace_all(recipe$Name, "([a-zA-Z])\\?([a-zA-Z])", "\\1 \\2")
+```
+
+Zamieniono również nazwy nie składające się z liter na braki danych:
+```{r}
+recipe <- recipe %>%
+  mutate(Name = ifelse(str_detect(Name, "^[^a-zA-Z]+$"), 'N/A', Name))
+```
+
+Następnie usunięto nawiasy ze znakami zapytania:
+```{r}
+recipe <- recipe %>%
+  mutate(Name = gsub("\\(\\?+\\)", "", Name))
+```
+
+```{r}
+recipe$Name <- as.factor(recipe$Name)
+n_distinct(recipe$Name)
+sum(recipe$Name == "N/A")
+```
+Po wykonanych przekształceniach w bazie znajdują się przepisy z 58967 unikalnymi nazwami oraz 228 przepisów bez nazwy.
+
+*URL - Adres URL, który identyfikuje stronę z przepisem*
+```{r}
+any(duplicated(recipe$URL))
+all(startsWith(as.character(recipe$URL), '/homebrew/recipe/view/'))
+```
+W zbiorze danych żaden adres URL się nie powtarza. Oznacza to, że nie ma zduplikowanych przepisów. Dodatkowo wszystkie adresy URL pochodzą z serwisu Brewer's Friend.
+
+*Style - rodzaj naparu* i *StyleID - numer ID naparu*
+Podczas analizowania rodzajów z pliku style.csv zauważono błędy przy zapisanie: 'Bière de Garde' oraz 'Märzen'. Zamieniono je na poprawną pisownię oraz wprowadzono te poprawy również w pliku z przepisami w kolumnach nazwy, URL oraz stylu, aby zapobiec możliwym błędom.
+```{r}
+recipe$Name <- str_replace_all(recipe$Name, fixed('Bi\xe8re de Garde'), 'Bière de Garde')
+recipe$Style <- str_replace_all(recipe$Style, fixed('Bi\xe8re de Garde'), 'Bière de Garde')
+recipe$URL <- str_replace_all(recipe$URL, fixed('Bi\xe8re de Garde'), 'Bière de Garde')
+style$Style <- str_replace_all(style$Style, fixed('Bi\xe8re de Garde'), 'Bière de Garde')
+
+recipe$Name <- str_replace_all(recipe$Name, fixed('M\xe4rzen'), 'Märzen')
+recipe$Style <- str_replace_all(recipe$Style, fixed('M\xe4rzen'), 'Märzen')
+recipe$URL <- str_replace_all(recipe$URL, fixed('M\xe4rzen'), 'Märzen')
+style$Style <- str_replace_all(style$Style, fixed('M\xe4rzen'), 'Märzen')
+recipe$Style <- as.factor(recipe$Style)
+```
+
+
+Następnie sprawdzono wartości StyleID:
+```{r}
+length(unique(recipe$Style))
+length(unique(recipe$StyleID))
+# sprawdzenie czy jednemu ID odpowiada jeden rodzaj w zmiennej Style
+for (i in 1:176){
+  if (length(unique(recipe[recipe$StyleID == i,]$Style)) > 1){
+    print("Błąd")
+  }
+}
+```
+W zbiorze znajduje się 176 rodzajów naparów. Każdemu numerowi ID odpowiada jeden rodzaj naparu (Style).
+
+Następnie sprawdzono przypisanie ID do nazw:
+```{r}
+for (i in 1:176){
+  if (unique(recipe[recipe$StyleID == i,]$Style)[1] == style[style$StyleID == i,]$Style){
+  }
+  else{
+    print('błąd')
+  }
+}
+```
+Przypisanie nazw do ID w obydwu plikach jest takie same.
+
+```{r}
+sum(recipe$Style =='N/A')
+```
+W zbiorze 596 przepisów nie ma przypisanego rodzaju.
+
+Najpopularniejsze rodzaje:
+```{r}
+head(sort(table(recipe$StyleID), decreasing = TRUE),10)
+ggplot(recipe , aes(x=factor(StyleID), fill=factor(StyleID))) +
+  geom_bar() +
+  scale_x_discrete(breaks = seq(1,176, 5)) +
+  theme(legend.position="none", axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8, margin = margin(t = 10)))
+head(sort(table(recipe$Style), decreasing = TRUE),10)
+```
+W zbiorze znajduje się najwięcej przepisów na piwo z numerem ID równym 7 - American IPA. Drugim najbardziej popularnym rodzajem piwa jest American Pale Ale.
+
+
+*SugarScale - Skala służąca do określenia stężenia rozpuszczonych substancji stałych w brzeczce*
+
+Statystyki:
+```{r}
+summary(recipe$SugarScale)
+```
+Dane o skali w jakiej zostały określone gęstości są kompletne.
+
+```{r}
+podsumowanie_sugar <- recipe %>%
+  group_by(SugarScale) %>%
+  summarise(liczba = n())
+ggplot(podsumowanie_sugar, aes(x="", y=liczba, fill = SugarScale)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "Skala") +
+  scale_fill_manual(values = c("Plato" = "orchid2", "Specific Gravity" = "rosybrown2")) +
+  geom_text(aes(label = round(liczba/nrow(recipe) * 100,2)), position = position_stack(vjust = 0.5), color = "white")
+```
+Ponad 97% przepisów zostało zapisanych przy użyciu skali Specific Gravity. W związku z tym, aby zapewnić spójność i porównywalność danych, wszystkie zmienne określone w skali Plato zostaną przekodowane na skalę Specific Gravity w dalszych etapach analizy (zmienne określone na skali ilorazowej).
+
+*BrewMethod - Technika warzenia*
+Statystyki:
+```{r}
+summary(recipe$BrewMethod)
+```
+Dane o użytych technikach warzenia są kompletne. Najczęściej występuje metoda All Grain (wszystkie ziarna), następnie BIAB (cały proces odbywa się w jednym worku) i extract (Metoda warzenia piwa, która wykorzystuje ekstrakt słodowy zamiast świeżych ziaren słodu.). Najmniej popularna metoda to Partial Mash(częściowy zacier). 
+
+Wizualizacja:
+```{r}
+ggplot(recipe , aes(x=factor(BrewMethod), fill=factor(BrewMethod))) + 
+  geom_bar() +
+  theme(legend.position="none") + 
+  scale_fill_brewer(palette="Pastel2") +
+  labs(title = "Metody warzenia piwa i ich częstość", y="Częstość występowania",
+       x = "Metoda warzenia")
+```
+
+
+*PrimingMethod - Metoda primingu (dodawania cukru lub ekstraktu słodowego podczas butelkowania)*
+
+```{r}
+n_distinct(recipe$PrimingMethod)
+```
+W zbiorze znajduje się 876 unikalnych wartości. 10 najczęściej występujących wartości:
+
+```{r}
+# tablica częstości
+tablica_czestosci_priming <- table(recipe$PrimingMethod)
+
+# 10 najczesciej wystepujacych nazw
+top10priming <- head(sort(tablica_czestosci_priming[tablica_czestosci_priming > 1], decreasing = TRUE),10)
+top10priming
+```
+Można zauważyć, że największą część stanowią braki danych. Istnieje również problem z jednolitym zapisem pozostałych metod, ponieważ niektóre z nich zostały zapisane dużymi literami, a niektóre małymi. Postanowiono ujednolicić zapis poprzez konwersję wszystkich odpowiedzi, za wyjątkiem 'N/A', na małe litery, usunięcie spacji z początku i końca oraz zamianę danych nie składających się z liter na braki odpowiedzi:
+```{r}
+recipe$PrimingMethod <- ifelse(recipe$PrimingMethod == 'N/A', 'N/A', tolower(recipe$PrimingMethod))
+n_distinct(recipe$PrimingMethod)
+
+# usunięcie spacji z początku i końca
+recipe$PrimingMethod <- trimws(recipe$PrimingMethod)
+n_distinct(recipe$PrimingMethod)
+
+# zamiana danych nie składających się z liter na N/A
+recipe <- recipe %>%
+  mutate(PrimingMethod = ifelse(str_detect(PrimingMethod, "^[^a-zA-Z]+$"), 'N/A', PrimingMethod))
+n_distinct(recipe$PrimingMethod)
+```
+Zamiana na małe litery pozwoliła zredykować liczbę uniklanych odpowiedzi o `r 876-687`, usunięcie spacji o 3, natomiast zamiana odpowiedzi nie składających się z liter o 7. Dodatkowo usunięcie nadprogramowych spacji zredukowało liczbę unikalnych metod o 2.
+```{r}
+n_distinct(gsub("\\s+", " ", recipe$PrimingMethod))
+```
+Poniżej przedstawiono 10 najczęstszych metod primingu (nie uwzględniając braków danych):
+
+```{r}
+recipe$PrimingMethod <- as.factor(recipe$PrimingMethod)
+
+tablica_czestosci_priming <- table(recipe$PrimingMethod)
+tablica_czestosci_priming_df <- as.data.frame(tablica_czestosci_priming)
+
+# NA i 10 najczesciej wystepujacych nazw
+top10priming <- head(sort(tablica_czestosci_priming[tablica_czestosci_priming > 1], decreasing = TRUE),11)
+
+top10priming_df <- as.data.frame(top10priming)
+top10priming_df <- top10priming_df[-1,]
+ggplot(top10priming_df, aes(x = reorder(Var1,Freq), y = Freq)) +
+  geom_bar(stat = "identity", fill = "goldenrod2") +
+  coord_flip() +  # Obrócenie osi x i y dla lepszej czytelności
+  labs(x = "Nazwa przepisu", y = "Liczba wystąpień", title = "10 najczęstszych metod primingu") +
+  theme_minimal()
+```
+W przypadku tej zmiennej występują jeszcze inne problemy, między innymi dane są wprowadzone w różnych językach przez co ta sama informacja zakodowana jest przez różne wartości (np. cukier - sugar - azucar - zucchero). Jednak w związku z tym, że braki danych stanowią `r round(67102/nrow(recipe)*100,2)` % zmienna ta nie zostania wykorzystana do badania, więc postanowiono nie dokonywać dalszych transformacji.
+
+### ZMIENNE OKREŚLONE NA SKALI PRZEDZIAŁOWEJ
+*Color - Standardowa metoda referencyjna – jasny do ciemnego, np. 40 = czarny*
+Barwa piwa określana jest za pomoca standardowej metody referencyjnej (SRM). Najczęściej skala SRM ograniczona jest do wartości z przedziału od 1 do 40. Niektóre źródła dopuszczają W przypadku bardzo ciemnych piw wartość SRM może przekraczać 40, np.
+* Foreign Stout:	30 - 65
+* Imperial Stout:	50 - 80 (35-79 w zależności od źródła)
+Wartością graniczną dla ludzkiego oka jest 40, wszystkie wartości powyżej są nierozróżnialne. Jedynie laboratoryjny sprzęt jest wstanie wskazać mroczniejszą czerń.
+Statystyki:
+```{r}
+summary(recipe$Color)
+```
+Średni wartość koloru (poziomu SMR) wynosi 13,4. Połowa piw otrzymanych z przepisów z bazy danych ma kolor z zakresu 5,17 do 16,79. Zmienna ta nie posiada braków danych.
+  
+```{r}
+sum(recipe$Color > 40)
+sum(recipe$Color > 80)
+color40 <- recipe[recipe$Color > 40,]
+head(summary(color40$Style))
+```
+Wśród przepisów umieszczonych na stronie 3492 ma wartość SRM powyżej 40 a tylko 10 powyżej 80. Pośród tych z wartością SRM powyżej 40 najczęściej występowały style: Russian Imperial Stout, Imperial Stout, American Stout, Sweet Stout, Oatmeal Stout oraz American Porter, które charakteryzują się wysokimi wartoścami, mogącymi sięgać powyżej 40. 
+
+Dodatkowo problemem jest wartość 0. W skali praktycznej, minimalna wartość SRM, która jest powszechnie akceptowana, to zazwyczaj 1, co odpowiada bardzo jasnym, prawie bezbarwnym piwom, takim jak niektóre bardzo lekkie lager-y.
+```{r}
+sum(recipe$Color == 0)
+sum(recipe$Color < 1)
+```
+W zbiorze występuje 160 piw z wartością koloru poniżej 1 przy czym 101 z nich ma wartość koloru równą 0.
+
+*PrimaryTemp - Temperatura na etapie fermentacji (C)*
+Piwo zazwyczaj fermentuje w temperaturze od 18 do 22°C.
+Statystyki:
+```{r}
+recipe$PrimaryTemp <- as.numeric(recipe$PrimaryTemp)
+summary(recipe$PrimaryTemp, na.rm = TRUE)
+```
+W zborze występują błędne, ujemne temperatury. Większość przepisów uwzględnia standardową temperaturę fermentacji.
+Wykres:
+```{r}
+ggplot(recipe, aes(x = PrimaryTemp)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 50) +
+  labs(x = "Temperatura", y = "Wartości", title = "Histogram temperatury fermentacji")
+```
+
+
+### ZMIENNE OKREŚLONE NA SKALI ILORAZOWEJ
+*Size.L. - Ilość zaparzona według podanego przepisu (l)*
+Statystyki:
+```{r}
+summary(recipe$Size.L.)
+```
+Więkość obserwacji mieści się w przedziale 18.93 - 23.66. Istnieją obserwacje nietypowe, ponieważ maksymalna wartość wynosi 9200. 
+
+Wykres:
+```{r}
+ggplot(recipe, aes(x = Size.L.)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Temperatura", y = "Wartości", title = "Histogram ilości zaparzonej według przepisu")
+```
+
+*OG* i *FG*
+Następnie przeanalizowano gęstości brzeczki przed i po fermentacji.
+```{r}
+summary(recipe$OG)
+summary(recipe$FG)
+```
+Wykresy:
+```{r}
+ggplot(recipe, aes(x = OG)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Gęstość", y = "Wartości", title = "Histogram gęstości początkowej")
+```
+
+```{r}
+ggplot(recipe, aes(x = FG)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Gęstość", y = "Wartości", title = "Histogram gęstości końcowej")
+```
+Można zauważyć, że rozkłady tych dwóch zmiennych są zbliżone. Większość obserwacji ma wartości niewiele większe od 1. W przypadku gęstości po fermentacji występują błędne, ujemne wartości. Wyższe wartości w przypadku obu zmiennych mogą być spowodowane wyrażeniem gęstości w skali Plato.
+
+Porównanie statystyk w zależności od skali:
+```{r}
+summary(recipe[recipe$SugarScale == 'Plato',]$OG)
+summary(recipe[recipe$SugarScale == 'Specific Gravity',]$OG)
+
+summary(recipe[recipe$SugarScale == 'Plato',]$FG)
+summary(recipe[recipe$SugarScale == 'Specific Gravity',]$FG)
+```
+Można zauważyć, że wartości kwartyli jak również wartości maksymalne są wyższe dla gęstości zapisanych w skali Plato. Postanowiono zamienić gęstości zapisane w tej skali na skalę SG, w której występuje większość zmiennych, aby ujednolicić zapis.
+
+Zamiany dokonano stosując poniższy wzór:
+SG = 1+ (plato / (258.6 – ( (plato/258.2) *227.1) ) )
+```{r}
+# funkcja konwercji plato na sg
+plato_to_sg <- function(plato) {
+  sg <- 1 + (plato / (258.6 - 227.1 * plato / 258.2))
+  return(sg)
+}
+# zamiana og na wartosci w sg
+recipe[recipe$SugarScale == 'Plato',]$OG <- sapply(recipe[recipe$SugarScale == 'Plato',]$OG, plato_to_sg)
+# zamiana fg na wartosci w sg
+recipe[recipe$SugarScale == 'Plato',]$FG <- sapply(recipe[recipe$SugarScale == 'Plato',]$FG, plato_to_sg)
+```
+
+Statystyki zmienionych wartości:
+```{r}
+summary(recipe[recipe$SugarScale == 'Plato',]$OG)
+summary(recipe[recipe_c$SugarScale == 'Plato',]$FG)
+```
+Statystyki uwzględniające wszystkie przepisy:
+```{r}
+summary(recipe$OG)
+summary(recipe$FG)
+```
+Według serwisu Brewer's Friend typowe wartości gęstości początkowej zawierają się od 1,02 do 1,13, natomiast typowe wartości gęstości końcowej są z zakresu 0,998 do 1,04. 
+Histogramy po zamienie skali:
+```{r}
+ggplot(recipe, aes(x = OG)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Gęstość (SG)", y = "Wartości", title = "Histogram gęstości początkowej")
+ggplot(recipe, aes(x = FG)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Gęstość (SG)", y = "Wartości", title = "Histogram gęstości końcowej")
+```
+Sprawdzenie różnic między gęstością początkową i końcową:
+```{r}
+sum(recipe$OG - recipe$FG > 0)
+sum(recipe$OG - recipe$FG < 0)
+sum(recipe$OG - recipe$FG == 0)
+roznica0 <- recipe[recipe$OG - recipe$FG == 0,]
+```
+Nie występują ujemne różnice. W przypadku 37 przepisów wartości gęstości początkowej oraz końcowej są identyczne. Jest to możliwe w przypadku piw bezalkoholowych. Postanowiono usunąć przepisy na piwa alkoholowe z zerową różnicą między OG i FG.
+
+```{r}
+recipe <- recipe[!(recipe$OG - recipe$FG == 0 & recipe$ABV > 1), ]
+```
+
+
+*ABV*
+Statystyki ilości alkoholu:
+```{r}
+summary(recipe$ABV)
+sum(recipe$ABV == 0)
+```
+Według serwisu, z którego zostały pobrane przepisy typowe wartości zawierają się w przedziale od 2,4 do 12,0. 
+* 1 kwartyl: 25% najniższych wartości ABV w zbiorze danych wynoszą mniej niż 5.08%. Oznacza to, że większość piw ma zawartość alkoholu powyżej tego progu.
+* Mediana: Mediana ilości piwa wynosi 5.79%. Oznacza to, że połowa piw ma niższe ABV, a połowa wyższe.
+*Średnia: Średnia wartość alkoholu wynosi 6,13%. 
+* 3 kwartyl: 75% najniższych wartości ABV wynosi mniej niż 6.83%. Oznacza to, że tylko 25% piw ma wyższą zawartość alkoholu niż ten próg.
+*Maximum: Najwyższa wartość ABV w zbiorze danych wynosi 54.72%. Jest to wartość skrajna, która może sugerować obecność bardzo mocnych piw lub błąd w danych.
+Minimalna wartość ze zbioru danych wynosi 0 co sugeruje występowanie 27 piw bezalkoholowych. Aby sprawdzić, czy wartości 0 nie są błędem postanowiono porównać podane ilości alkoholu z ręcznie obliczonymi:
+```{r}
+abv0 <- recipe[recipe$ABV == 0,]
+abv0$obliczone_abv <- 131.25 * (abv0$OG - abv0$FG) 
+sum(abv0$ABV - abv0$obliczone_abv == 0)
+```
+Wartości 0 są poprawne. 
+
+Histogram ilości alkoholu w piwie:
+```{r}
+ggplot(recipe, aes(x = ABV)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Ilość alkoholu (%)", y = "Wartości", title = "Histogram ilości alkoholu")
+```
+
+
+*IBU - Międzynarodowa jednostka goryczy*
+Według serwisu, z którego zostały pobrane dane piwa w zależności od rodzaju posiadają wskaźnik goryczki z zakresu od 0 do 120.
+Statystyki:
+```{r}
+summary(recipe$IBU)
+```
+Większość danych w zbiorze przyjmuje wartości typowe. Średnia wartość IBU wynosi 44,28. Mediana przyjmuje wartość 35,77.
+```{r}
+sum(recipe$IBU > 120)
+ibu120 <- recipe[recipe$IBU > 120, ]
+sum(recipe$IBU > 2600)
+```
+W przypadku 2377 przepisów wartość goryczki przekracza 120, natomiast w przypadku 3 przepisów przekracza wartość 2600, która uznana jest za wartość dla najbardziej goryczkowego piwa wszech czasów. 
+
+Wykres:
+```{r}
+ggplot(recipe, aes(x = IBU)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Wartość IBU", title = "Histogram goryczy alkoholu")
+```
+
+
+*BoilSize - Ilość płynu na początku gotowania*
+Statystyki:
+```{r}
+summary(recipe$BoilSize)
+```
+* Min.: Najmniejsza zarejestrowana wartość pre-boil size wynosi 1.00l. Oznacza to, że istnieją przepisy, gdzie ilość płynu przed zagotowaniem była bardzo niska, co może być wynikiem specyficznych warunków warzenia lub błędów pomiarowych.
+
+* Mediana: Mediana ilości płynu na początku gotowania wynosi 27.44l. Oznacza to, że połowa próbek ma niższe wartości BoilSize, a połowa wyższe.
+
+* Średnia : Średnia wartość płynu przed gotowaniem wynosi 49.73l. 
+
+* Max.: Najwyższa zarejestrowana wartość wynosi 9700.00l. Jest to wartość skrajna.
+
+Histogram danych:
+```{r}
+ggplot(recipe, aes(x = BoilSize)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Ilość płynu (l)", title = "Histogram ilości płynu na początku gotowania")
+```
+
+
+Warto również porównać stosunek ilości płynu na początku gotowania do otrzymanej ilości:
+
+```{r}
+summary(recipe$BoilSize/recipe$Size.L.)
+```
+Zazwyczaj ten stosunek wynosi mniej więcej od 1,1 do 1,3 - w badanym zbiorze wartości od 1 do 3 kwartyla. Stosunek ten zostanie później użyty do wykrycia wartości nietypowych.
+
+*BoilTime - Czas gotowania (min)*
+Statystyki:
+```{r}
+summary(recipe$BoilTime)
+```
+Typowy czas gotowania piwa wynosi 60min.
+
+```{r}
+sum(recipe$BoilTime > 60 | recipe$BoilTime < 60) / nrow(recipe)
+```
+25% przepisów uwzględnia czas inny niż 60min.
+
+Wykres
+```{r}
+ggplot(recipe, aes(x = BoilTime)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Czas gotowania (min)", title = "Histogram czasu gotowania")
+```
+*BoilGravity - Ciężar właściwy brzeczki przed zagotowaniem*
+Typowy zakres ciężaru brzeczki przed zagotowaniem zależy od stylu piwa i receptury. 
+BoilGravity w skali SG dla różnych typów piwa:
+* Lekkie piwa (np. piwa jasne, lekkie lagery): Typowy zakres: 1.030 - 1.040 SG
+* Piwo średnio mocne (np. pale ale, amber ale): Typowy zakres: 1.040 - 1.055 SG
+* Mocne piwa (np. IPA, stout): Typowy zakres: 1.055 - 1.070 SG
+* Bardzo mocne piwa (np. barleywine, Russian imperial stout): Typowy zakres: 1.070 - 1.090+ SG
+```{r}
+recipe$BoilGravity <- as.numeric(recipe$BoilGravity)
+summary(recipe$BoilGravity, na.rm=TRUE)
+```
+Występują 2990 braki danych.
+
+Wartości minimalna i maksymalna są nierealistyczne. 
+
+Jednak dane te są zapisane w różnej skali!
+
+Statystyki w zależności od skali:
+```{r}
+summary(recipe[recipe$SugarScale == 'Plato',]$BoilGravity)
+summary(recipe[recipe$SugarScale == 'Specific Gravity',]$BoilGravity)
+```
+Ponownie należy dokonać konwersji skali Plato na SG.
+```{r}
+recipe[recipe$SugarScale == 'Plato',]$BoilGravity <- sapply(recipe[recipe$SugarScale == 'Plato',]$BoilGravity, plato_to_sg)
+# statystyki po zamianie
+summary(recipe[recipe$SugarScale == 'Plato',]$BoilGravity)
+summary(recipe[recipe$SugarScale == 'Specific Gravity',]$BoilGravity)
+```
+Statystyki po zamianie:
+```{r}
+summary(recipe$BoilGravity)
+```
+Statystyki:
+* 1. kwartyl: 1.040 - Jest to dolna granica typowego zakresu dla większości piw o średniej mocy / górna granica piw o lekkiej mocy
+* Mediana: 1.047 - Wartość w środku zakresu dla średnio mocnych piw, co jest zgodne z typowymi wartościami.
+* 3. kwartyl: 1.058 - Jest to wartość typowego zakresu dla mocniejszych piw.
+
+Histogram:
+```{r}
+ggplot(recipe, aes(x = BoilGravity)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Ciężar brzeczki przed zagotowaniem (SG)", title = "Histogram ciężaru brzeczki przed zagotowaniem")
+```
+*Efficiency - Wydajność ekstrakcji cukrów (%)*
+```{r}
+summary(recipe$Efficiency)
+```
+Zazwyczaj przyjmuje wartości z przedziału od 65 do 80%. Jednak możliwe są wartości z zakresu od 0 do 100 przy czym skrajne wartości są rzadko spotykane.
+
+Wykres
+```{r}
+ggplot(recipe, aes(x = Efficiency)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Wydajność ekstrakcji cukrów (%)", title = "Histogram wydajności ekstrakcji cukrów")
+```
+Większość danych zawiera się w typowym zakresie.
+
+*MashThickness - Ilość wody na funt ziarna*
+Statystyki:
+```{r}
+recipe$MashThickness <- as.numeric(recipe$MashThickness)
+summary(recipe$MashThickness, na.rm = TRUE)
+```
+Podane wartości są w qt/lb. Ponieważ pozostałe dane są w litrach, postanowiono przeliczyć wartości na l/kg w celu ujednolicenia.
+ρl/kg = 2.08635111 × ρqt/lb
+```{r}
+qtlb_to_lkg <- function(qtlb) {
+  lkg <- 2.08635111*qtlb
+  return(lkg)
+}
+recipe$MashThickness <- sapply(recipe$MashThickness, qtlb_to_lkg)
+```
+Statystyki po zamianie:
+```{r}
+summary(recipe$MashThickness, na.rm = TRUE)
+```
+Występuje wiele braków danych oraz wartości skrajne.
+
+Histogram:
+```{r}
+ggplot(recipe, aes(x = MashThickness)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Ilość wody (l) na kg ziarna", title = "Histogram grubości ziarna")
+```
+
+*PitchRate - Drożdże dodane do fermentora na jednostkę ciężaru – milion komórek/ml brzeczki /stopień Plato*
+Statystyki:
+```{r}
+recipe$PitchRate <- as.numeric(recipe$PitchRate)
+summary(recipe$PitchRate, na.rm = TRUE)
+```
+* Min: Wartość minimalna równa 0 jest nietypowa, ponieważ każda fermentacja wymaga jakiejś ilości drożdży.
+* 1 kwartyl: Wartość 1 kwartylu jest stosunkowo niska, ale może  ale może być odpowiednia dla niektórych lekkich piw.
+* Pozostałe wartości są typowe.
+* 39249 brakujących wartości (53,14%).
+
+Przeliczenie na SG:
+```{r}
+recipe$PitchRate <- sapply(recipe$PitchRate, plato_to_sg)
+summary(recipe$PitchRate, na.rm = TRUE)
+```
+Wartości niewiele się od siebie różnią.
+
+Wykres:
+```{r}
+ggplot(recipe, aes(x = PitchRate)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Drożdże dodane do fermentora na jednostkę ciężaru – milion komórek/ml brzeczki /stopień SG", title = "Histogram ")
+```
+
+*Priming Amount*
+Wyświetlenie 10 pierwszych wartości PrimingAmount:
+```{r}
+head(recipe$PrimingAmount,10)
+recipe <- recipe %>%
+    mutate(
+        Amount = str_extract(PrimingAmount, "[0-9.]+(-[0-9.]+)?"),  # Wyodrębnienie wartości numerycznych i zakresów
+        Unit = str_extract(PrimingAmount, "[a-zA-Z/]+")  # Wyodrębnienie jednostek
+    )
+recipe$Amount <- as.numeric(recipe$Amount)
+summary(recipe$Amount, na.rm = TRUE)
+n_distinct(recipe$Unit)
+recipe$Unit <- as.factor(recipe$Unit)
+head(summary(recipe$Unit),15)
+```
+Można zauważyć, że zmienne zapisane są w różnych jednostkach. Postanowiono rozdzielić zmienna na Amount (ilość cukru) oraz Unit (jednostka, w której jest wyrażony - skala nominalna). Ilość cukru została wyrażona w 251 jednostkach. W związku z tym interpretacja statystyk ilości użytego cukru nie ma sensu.
+Postanowiono zamienić wartości NA i wartości nie zawierające liter na "N/A" oraz zapisać wszystko małymi literami:
+```{r}
+recipe$Unit <- ifelse(is.na(recipe$Unit), "N/A", as.character(recipe$Unit))
+recipe <- recipe %>%
+  mutate(Unit = ifelse(str_detect(Unit, "^[^a-zA-Z]+$"), "N/A", Unit))
+# male litery
+recipe$Unit <- ifelse(recipe$Unit == 'N/A', 'N/A', tolower(recipe$Unit))
+recipe$Unit <- as.factor(recipe$Unit)
+n_distinct(recipe$Unit)
+head(summary(recipe$Unit),10)
+```
+Udało się zredukować liczbę unikalnych wartości do 198. Wiele wartości oznacza to samo, np. g - grams. Zmienna Unit wymagałaby ujednolicenia zapisu jednostek a następnie zmienną Amount powinno przeliczyć się na jedną jednostkę, aby móc porównywać jej wartości. 
+```{r}
+sum(is.na(recipe$Amount))/nrow(recipe)
+sum(recipe$Unit == "N/A") / nrow(recipe)
+```
+Zważając na to, że w przypadku ilości cukrów występuje ponad 93% braków a w przypadku jednostki co najmniej 94,7% postanowiono dalej nie przekształcać tych zmiennych, ponieważ zmienna i tak nie zostanie wykorzystana do badania.
+
+### Opis zmiennych po przekształceniach
+* Name - Nazwa przepisu na piwo
+* URL - Adres URL, który identyfikuje stronę z przepisem, 
+* Style - Rodzaj warzenia
+* StyleID - Numer ID naparu
+* SugarScale - Skala służąca do określenia stężenia rozpuszczonych substancji stałych w brzeczce (Plato / Specific Gravity) (wszystkie wielkości są już przeliczone na SG, więc zmienna nie ma już zastosowania)
+* BrewMethod - Technika warzenia
+* PrimingMethod - Metoda primingu (dodawania cukru lub ekstraktu słodowego podczas butelkowania)
+* UserId - ID użytkownika
+
+
+* Color - Standardowa metoda referencyjna – jasny do ciemnego, np. 40 = czarny
+* PrimaryTemp - Temperatura na etapie fermentacji (C)
+
+* Size.L. - Ilość zaparzona według podanego przepisu (l)
+* OG - Gęstość brzeczki nastawnej (przed rozpoczęciem fermentacji) wyrażona za pomocą gęstości względnej (SG) (ang. Original Gravity - gęstość początkowa)
+* FG - Gęstość brzeczki po zakończonej fermentacji wyrażona za pomocą gęstości względnej (SG) (ang. Final Gravity - gęstość końcowa)
+* ABV - Ilość alkoholu w piwie określona jako procent objętości (ang. Alcohol by Volume)
+* IBU - Międzynarodowa jednostka goryczy
+* BoilSize - Ilość płynu na początku gotowania (l)
+* BoilTime - Czas gotowania (min)
+* BoilGravity - Ciężar właściwy brzeczki przed zagotowaniem (SG)
+* Efficiency - Wydajność ekstrakcji cukrów (%)
+* MashThickness - Ilość wody (l) na kg ziarna
+* PitchRate - Drożdże dodane do fermentora na jednostkę ciężaru – milion komórek/ml brzeczki /stopień Specific Gravity
+
+
+## Imputacja braków danych
+### Liczba i wzorce braków
+```{r}
+# Zamiana "N/A" na NA w kolumnach character
+recipe <- recipe %>%
+  mutate(across(where(is.character), ~na_if(., "N/A")))
+
+# Zamiana "N/A" na NA w kolumnach factor
+recipe <- recipe %>%
+  mutate(across(where(is.factor), ~na_if(as.character(.), "N/A")))
+plot_missing <- aggr(recipe, col=c('darkgrey','tomato'),
+                     numbers=TRUE, sortVars=TRUE,
+                     labels=names(recipe), cex.axis=0.6,
+                     cex.lab=1.5,
+                     gap=1, ylab=c('Braki',"Wzór braków"))
+summary(aggr(recipe, plot=FALSE))
+```
+Najwięcej braków danych (94,8%) występuje w przypadku zmiennych określających jednostkę użytego cukru (Unit) oraz zbliżona wartość (93,7%) występuje w przypadku ilości użytego cukru (PrimingAmount, Amount). Ponad 50% danych zawiera również braki w przypadku zmiennych PrimingMethod, UserId oraz PitchRate. Braki występują również w przypadku zmiennych  MashThickness, PrimaryTemp, BoilGravity, Style oraz Name.
+Prawie 17% danych stanowią przepisy bez podanej ilości użytego cukru i metody primingu (reszta informacji jest uzupełniona). Następnie kolejny największy odsetek (10,77%) stanowią dane z brakami w kolumnach PitchRate, PrimaryTemp i PrimingAmount. Jedynie niecały 1% danych posiada kompletne dane.
+
+### Uzupełnianie braków
+*Unit oraz Amount*
+Liczba braków:
+```{r}
+sum(is.na(recipe$Amount))
+sum(is.na(recipe$Unit))
+```
+Z uwagi na dużą liczbę brakujących danych w przypadku ilości użytego cukru oraz braku jednolitych jednostek postanowiono nie imputować braków, ponieważ zmienna i tak nie zostanie wykorzystana do badania.
+
+*PrimingMethod*
+```{r}
+sum(is.na(recipe$PrimingMethod))
+```
+Podobna sytuacja co w przypadku poprzednich zmiennych - ze wględu na dużą liczbę braków danych oraz brak jednolitego języka zdecydowano się nie imputować danych.
+
+*UserId*
+Postanowiono nie uzupełniać braków w tej kolumnie, ponieważ zmienna ta i tak nie jest potrzebna do badania.
+
+*PitchRate*
+```{r}
+sum(is.na(recipe$PitchRate))
+summary(recipe$PitchRate)
+```
+PitchRate, czyli Drożdże dodane do fermentora na jednostkę ciężaru ( milion komórek/ml brzeczki /stopień SG) mogą zależeć od wielu czynników, które mogą mieć wpływ na efektywność fermentacji i ostateczne właściwości piwa. W związku z tym postanowiono zastosować metodę hotdeck ze zmiennymi pomocniczymi Size.L., Style, OG i PrimaryTemp. Przyjęcie tych zmiennych jako kryteriów podobieństwa pozwala na imputację PitchRate na podstawie przepisów o podobnych parametrach fermentacji i typie piwa.
+Wzór:
+hotdeck(data = zbior danych, variable = cecha do imputacji, ord_var = zmienne pomocnicze na podstawie, których sortowany jest zbiór cech, domain_var = konkretna cecha, na podstawie, której algorytm szuka podobieństwa)
+```{r}
+recipe_PitchRate2 <- hotdeck(data = recipe, variable = 'PitchRate', ord_var = c('Size.L.','Style','OG','PrimaryTemp'))
+recipe_PitchRate3 <- matchImpute(recipe,
+                                variable = 'PitchRate',
+                                match_var = c('Size.L.','Style','OG',
+                                              'PrimaryTemp'))
+
+```
+Wizualizacja rozkładu zmiennych:
+```{r}
+ggplot(recipe, aes(x = PitchRate)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Drożdże dodane do fermentora na jednostkę ciężaru – milion komórek/ml brzeczki /stopień SG", title = "Histogram przed imputacją")
+ggplot(recipe_PitchRate2, aes(x = PitchRate)) +
+  geom_histogram(color="black", fill="goldenrod2", bins = 10) +
+  labs(x = "Drożdże dodane do fermentora na jednostkę ciężaru – milion komórek/ml brzeczki /stopień SG", title = "Histogram po imputacji")
+```
+Histogram danych przed i po imputacji są zbliżone.
+```{r}
+recipe <- hotdeck(data = recipe, variable = 'PitchRate', ord_var = c('Size.L.','Style','OG','PrimaryTemp'))
+sum(is.na(recipe$PitchRate))
+```
+
+
+*MashTickness - ilość wody (l) na kg ziarna*
+Liczba brakujących wartości:
+```{r}
+sum(is.na(recipe$MashThickness))
+summary(recipe$MashThickness, na.rm = TRUE)
+```
+Postanowiono ponownie zastosować metodę hotdeck uwzględniając te same zmienne co poprzednio oraz metodę warzenia (BrewMethod), ponieważ w zależności od metody piwa mają różne wymagania dotyczące proporcji wody do ziarna. 
+```{r}
+recipe2 <- hotdeck(data = recipe, 
+                  variable = 'MashThickness', 
+                  ord_var = c('Size.L.', 'Style', 'OG', 'PrimaryTemp', 'BrewMethod'))
+```
+Statystyki:
+```{r}
+summary(recipe$MashThickness)
+summary(recipe2$MashThickness)
+recipe <- hotdeck(data = recipe, 
+                  variable = 'MashThickness', 
+                  ord_var = c('Size.L.', 'Style', 'OG', 'PrimaryTemp', 'BrewMethod'))
+```
+Statytsyki są prawie identyczne, jedynie wartość średnia się lekko zmieniła.
+
+*PrimaryTemp*
+```{r}
+sum(is.na(recipe$PrimaryTemp))
+summary(recipe$PrimaryTemp)
+```
+Na temperaturę na etapie fermentacji mają wpływ rodzaj piwa, OG, FG oraz ABV. Zastosowano metodę Match imputatio, ponieważ dawała ona mniejsze maksymalne wartości.
+
+```{r}
+recipe <- matchImpute(
+  data = recipe,  
+  variable = "PrimaryTemp",  
+  match_var = c("Style", "OG", "FG", "ABV")  
+)
+summary(recipe[recipe$PrimaryTemp_imp == TRUE,]$PrimaryTemp)
+```
+W danych imputowanych są wartości skrajne. 
+
+*BoilGravity*
+```{r}
+sum(is.na(recipe$BoilGravity))
+summary(recipe$BoilGravity)
+```
+Tak jak wspomniano przy opisie zmiennej BoilGravity zależy od stylu piwa i receptury. Na gęstość brzeczki przed zagotowaniem mogą wpływać: gęstość początkowa (OG), ilość zaparzona według podanego przepisu, ilość płynu na początku gotowania, czas gotowania, wydajność ekstrakcji cukrów oraz metoda warzenia.
+```{r}
+recipe2 <- hotdeck(data = recipe, 
+                  variable = 'BoilGravity', 
+                  ord_var = c('OG', 'Size.L.', 'BoilSize', 'BoilTime', 'Efficiency', 'BrewMethod'))
+summary(recipe$BoilGravity)
+summary(recipe2$BoilGravity)
+```
+```{r}
+recipe <- hotdeck(data = recipe, 
+                  variable = 'BoilGravity', 
+                  ord_var = c('OG', 'Size.L.', 'BoilSize', 'BoilTime', 'Efficiency', 'BrewMethod'))
+```
+
+
+*Style*
+```{r}
+sum(is.na(recipe$Style))
+```
+Wśród przepisów 596 nie ma przypisanego rodzaju.
+
+Następnie przeanalizowano przepisy, które nie zawierają rodzaju piwa.Już przy analizowaniu zmiennej Name w wcześniejszej części pracy zauważono, że nazwy przepisów zawierają czasami nazwę rodzaju piwa.
+```{r}
+# przepisy bez stylu
+nastyle <- recipe[is.na(recipe$Style),]
+
+contains_style <- function(name, styles) {
+  any(str_detect(name, styles))
+}
+
+# dodanie kolumy, czy nazwa piwa zawiera którykolwiek ze stylów piwa
+nastyle <- nastyle %>%
+  rowwise() %>%
+  mutate(contains_style = contains_style(Name, style$Style)) %>%
+  ungroup()
+
+nastyle_znazwa <- nastyle %>% filter(contains_style)
+nrow(nastyle_znazwa)
+```
+W przypadku 53 przepisów w nazwie zawiera się nazwa jakiegoś rodzaju piwa. Postanowiono zaimputować braki w tych 53 przypadkach wartościami z nazwy:
+```{r}
+# przypisanie stylów z nazw
+assign_style <- function(name, styles) {
+  match <- styles[str_detect(name, styles)]
+  if (length(match) > 0) {
+    return(match[1]) #pierwszy dopasowany styl
+  } else {
+    return(NA)
+  }
+}
+
+recipe <- recipe %>%
+  rowwise() %>%
+  mutate(Style = if_else(is.na(Style), assign_style(Name, style$Style), Style)) %>%
+  ungroup()
+
+sum(is.na(recipe$Style))
+```
+
+W pozostałych przypadkach postanowiono dokonać imputacji metodą hotdeck. Zmienne, które mogą mieć wpływ na rodzaj piwa:
+* ABV (Alcohol by Volume): Procent alkoholu w piwie może być charakterystyczny dla konkretnych stylów piw.
+* Color: Kolor piwa jest również charakterystyczny dla różnych stylów piw (np. jasne, ciemne, czekoladowe).
+*IBU : Stopień gorzkości piwa jest kluczowym czynnikiem różnicującym między stylami piw (np. Lambic niskie wartości, stout wysokie wartości).
+* BrewMethod: Metody wrzesnia mogą wpływać na charakterystykę piwa.
+Dodatkow ważnymi parametrami są również OG i FG (gęstość początkowa i końcowa). Przyjmują one wartości z różnych zakresów w zależności od rodzaju piwa.
+
+```{r}
+recipe <- hotdeck(data = recipe, 
+                  variable = 'Style', 
+                  ord_var = c('ABV','Color','IBU','BrewMethod','OG','FG'))
+sum(is.na(recipe$Style))
+```
+
+
+*Name*
+Liczba braków:
+```{r}
+sum(is.na(recipe$Name))
+```
+
+Przepisy bez nazwy:
+```{r}
+naname <- recipe[is.na(recipe$Name),]
+naname$posible_name <- sapply(strsplit(naname$URL, "/"), function(x) tail(x, 1))
+```
+Dodano kolumnę z końcową częścią adresu URL, ponieważ to z niej zazawyczaj wynika nazwa. Jednak w przypadku tego zbioru danych wartości z URL nie zawierają sensownych nazw (zawierają cyfry, myślniki itp.). Zauważono jednak, że niektóre końcowe części adresów zawierają jedynie cyfry a taka forma nazwy jest dozwolona na stronie - w związku z tym postanowiono zaimputować te nazwy.
+```{r}
+# Wyodrębnienie końcowej części adresu URL
+extracted_names <- str_extract(naname$URL, "[^/]+$")
+
+only_digits <- grepl("^[0-9]+$", extracted_names)
+
+# Zaimputowanie nazw przepisów tylko tam, gdzie są braki i końcówka zawiera same cyfry
+naname <- naname %>%
+  mutate(Name = ifelse(is.na(Name) & only_digits, extracted_names, Name))
+```
+W przypadku pozostałych przepisów, myślniki mogą oznaczać niestandardowe znaki, które strona akceptuje. W związku z tym, imputacja tych nazw mogłaby prowadzić do zniekształcenia oryginalnego zamysłu. Dlatego postanowiono nie imputować tych wartości.
+
+## Analiza wartości nietypowych
+### Skala przedziałowa
+*Color*
+```{r}
+boxplot(recipe$Color, main = "Wykres pudełkowy")
+```
+Wykres pudełkowy wskazuje na wiele wysokich wartości odstających. Wcześniej zaobserwowano, że istnieje 3492 piw o kolorze powyżej 40. 
+
+```{r}
+highcolor <- recipe[recipe$Color > 40,]
+sort(summary(as.factor(highcolor$Style)), decreasing = TRUE)
+```
+Piwa Stout, Black IPA oraz Portery charakteryzują się ciemnym kolorem. Postanowiono jednak zamienić wartości koloru tych 3 rodzajów piw na 40, ponieważ powyżej tej wartości różnice i tak nie są rozróżnialne dla ludzkiego oka a serwis, z którego pochodzą dane przyjmuje 40 za górną granicę koloru.
+
+```{r}
+recipe<- recipe %>%
+  mutate(Color = if_else(grepl("Stout", Style, ignore.case = TRUE) & Color > 40, 40, Color))
+recipe <- recipe %>%
+  mutate(Color = if_else(grepl("Porter", Style, ignore.case = TRUE) & Color > 40, 40, Color))
+recipe <- recipe %>%
+  mutate(Color = if_else(grepl("Black IPA", Style, ignore.case = TRUE) & Color > 40, 40, Color))
+sum(recipe$Color > 40)
+```
+
+Przepisy z wartością koloru poniżej 1:
+```{r}
+lowcolor <- recipe[recipe$Color <1,]
+sort(summary(as.factor(lowcolor$Style)), decreasing = TRUE)
+```
+Większość z tych piw może charakteryzować się jasną barwą, wyjątek stanowią piwa Stout i Portery. Dodatkowo piwa IPA również przybierają zazwyczaj ciemniejsze kolory niż okolice 1. Wszystkie pozostałe postanowiono zamienić na 1, aby mieściły się w skali.
+```{r}
+recipe <- recipe %>%
+  mutate(Color = ifelse(Color < 1 & !grepl("IPA|Stout|Porter", Style), 1, Color))
+```
+
+Pozostałe wartości, większe od 40 lub mniejsze od 1 postanowiono usunąć.
+```{r}
+recipe <- recipe %>%
+  filter(Color <= 40 & Color >= 1)
+```
+
+
+*PrimaryTemp - Temperatura na etapie fermentacji (C)*
+```{r}
+boxplot(recipe$PrimaryTemp)
+summary(recipe$PrimaryTemp)
+```
+Zmienna posiada skrajne wartości temperatury. Piwo zazwyczaj fermentuje w temperaturze od 18 do 22°C. Jednak temperatura piwa dolnej fermentacji może zaczynać się od 5 stopni a zakres fermentacji górnej może sięgać do 25C. Rzadziej są spotykane wyższe wartości (niektóre źródła mówią o temperaturze maksymalnej 40C)
+```{r}
+recipe_temp <- recipe[recipe$PrimaryTemp >= 5 & recipe$PrimaryTemp <= 40,]
+sum(recipe$PrimaryTemp < 5 | recipe$PrimaryTemp > 40) / nrow(recipe)
+```
+Postanowio wyeliminować przepisy z temperaturą spoza zakresu 5-40C (usunięto 0,6% danych).
+Następnie wykonano test Rosnera sprawdzając 10 obserwacji czy są wartościami skrajnymi.
+```{r}
+rosnerTest(recipe_temp$PrimaryTemp, k = 10)$all.stats
+```
+Wartość temperatury wynosząca 40 jest skrajną wartością. Obniżono zatem próg maksymalnej temperatury do 35C i ponownie wykonano test.
+```{r}
+recipe_temp <- recipe[recipe$PrimaryTemp >= 5 & recipe$PrimaryTemp <= 35,]
+rosnerTest(recipe_temp$PrimaryTemp, k = 10)$all.stats
+```
+Wartość 35 również uważana jest za skrajną. Po obniżeniu progu do temperatury 34C jedynie wartość 34 uznawana jest za skrajna.
+```{r}
+recipe_temp <- recipe[recipe$PrimaryTemp >= 5 & recipe$PrimaryTemp <= 34,]
+rosnerTest(recipe_temp$PrimaryTemp, k = 10)$all.stats
+```
+W zbiorze postanowiono uwzględnić przepisy z wartością temperatury z przedziału [5, 34), ponieważ nawet temperatura około 34C w praktyce jest rzadko spotykana (ale może występować). 
+```{r}
+sum(recipe$PrimaryTemp < 5 | recipe$PrimaryTemp >= 34) / nrow(recipe)
+recipe <- recipe[recipe$PrimaryTemp >= 5 & recipe$PrimaryTemp <= 34,]
+summary(recipe$PrimaryTemp)
+```
+Ostatecznie usunięto 0,7% danych.
+
+### Skala ilorazowa
+*OG - Gęstość brzeczki nastawnej (przed rozpoczęciem fermentacji) wyrażona za pomocą gęstości względnej (SG) (ang. Original Gravity - gęstość początkowa)*
+```{r}
+summary(recipe$OG)
+boxplot(recipe$OG)
+```
+Na wykresie jak również w statystykach można zauważyć obserwacje nietypowe. Według serwisu typowe wartości gęstości początkowej dla większości rodzajów piw mieszczą się w zakresie 1.02 do 1.13.
+Testem Rosnera sprawdzono czy wartości z zakresu 1.02-1.14 są nietypowe. Test wskazał wartość 1.14 jako nietypową.
+
+```{r}
+sum(recipe$OG < 1.02 | recipe$OG >= 1.14) / nrow(recipe)
+recipe_temp <- recipe[recipe$OG >= 1.02 & recipe$OG <= 1.14,]
+rosnerTest(recipe_temp$OG, k = 10)$all.stats
+```
+Obniżenie górnej wartości do sugerowanej przez stronę (1.13).
+```{r}
+sum(recipe$OG < 1.02 | recipe$OG > 1.13) / nrow(recipe)
+recipe_temp <- recipe[recipe$OG >= 1.02 & recipe$OG <= 1.13,]
+rosnerTest(recipe_temp$OG, k = 10)$all.stats
+```
+Test nie wykazał wartości nietypowych. Postanowiono usunąć 0,7% przepisów z OG spoza przedziału.
+```{r}
+recipe <- recipe[recipe$OG >= 1.02 & recipe$OG <= 1.13,]
+```
+
+*FG - Gęstość brzeczki po zakończonej fermentacji wyrażona za pomocą gęstości względnej (SG) (ang. Final Gravity - gęstość końcowa)*
+```{r}
+summary(recipe$FG)
+boxplot(recipe$FG)
+```
+Boxplot wskazuje na możliwość występowania obserwacji nietypowych. Nie są to już tak wysokie wartości jak w przypadku OG. 
+Według serwisu typowe wartości końcowej gęstości w zależności od rodzaju piwa mieszczą się w przedziale od 0,998 do 1,04.
+
+```{r}
+recipe_temp <- recipe[recipe$FG <= 1.04,]
+rosnerTest(recipe_temp$FG, k = 10)$all.stats
+```
+Test Rosnera wskazuje wartość 1.04 jako nietypową, jednak zważając na dane na stronie serwisu postanowiono się pozostawić przepisy z taką wartością FG. Ostatecznie usunięto 37 przepisów z wartościami FG spoza zakresu [0.998, 1.04] co stanowiło 0,05% danych.
+```{r}
+sum(recipe$FG < 0.998 | recipe$FG > 1.04)
+sum(recipe$FG < 0.998 | recipe$FG > 1.04) / nrow(recipe)
+recipe <- recipe[recipe$FG >= 0.998 & recipe$FG <= 1.04,]
+```
+*ABV - Ilość alkoholu w piwie określona jako procent objętości (ang. Alcohol by Volume)*
+```{r}
+summary(recipe$ABV)
+boxplot(recipe$ABV)
+```
+Poprzez eliminację niektórych przepisów, ze zbioru zostału usunięte piwa z zerową zawartością alkoholu oraz piwo z największą ilością alkoholu - 54.72. 
+Według serwisu, z którego zostały pobrane przepisy typowe wartości dla większości gatunków zawierają się w przedziale od 2,4 do 12,0. 
+```{r}
+sum(recipe$ABV > 12)
+```
+W zbiorze istnieją 353 piwa z zawartością alkoholu powyżej 12%. W przypadku tych piw postanowiono przeliczyć ABV za pomocą wzoru z serwisu:
+```{r}
+abv12 <- recipe[recipe$ABV > 12,]
+abv12$obliczone_abv <- 131.25 * (abv12$OG - abv12$FG) 
+abv12$roznica <- abv12$ABV - abv12$obliczone_abv
+summary(abv12$roznica)
+summary(abv12$ABV)
+summary(abv12$obliczone_abv)
+```
+Podane w przepisie ABV w stosunku do obliczonego różniło się najwiecej o 2,16%. Po przeliczeniu najmniejsza wartość wynosiła 10,5% natomiast najwyższa 16,80%. Postanowio zastosować przeliczone wartości dla przepisów, które podały zawartość alkoholu powyżej 12%.
+```{r}
+calculate_abv <- function(OG, FG) {
+  return(131.25 * (OG - FG))
+}
+
+# Obliczenie ABV i zamiana wartości powyżej 12% w jednej linii
+recipe <- recipe %>%
+  mutate(ABV = ifelse(ABV > 12, calculate_abv(OG, FG), ABV))
+summary(recipe$ABV)
+```
+```{r}
+sum(recipe$ABV>12)
+```
+Postanowio pozostawić pozostałe przepisy w zbiorze, ponieważ istnieją piwa z taką zawartością alkoholu.
+
+
+*IBU - Międzynarodowa jednostka goryczy*
+Według serwisu, z którego zostały pobrane dane piwa w zależności od rodzaju posiadają wskaźnik goryczki z zakresu od 0 do 120.
+```{r}
+summary(recipe$IBU)
+boxplot(recipe$IBU)
+```
+Wykres pudełkowy i statystyki wskazują na wartości nietypowe.
+
+Ponad 2 tysiące wartości goryczki nie mieści się w typowej skali. Jednak żadne piwo już nie przekracza 
+```{r}
+sum(recipe$IBU > 120)
+sum(recipe$IBU > 2600)
+```
+```{r}
+sort(summary(as.factor(recipe[recipe$IBU > 120,]$Style)), decreasing = TRUE)
+```
+Z wymienionych Imperial IPA,American IPA, Double IPA,American Barleywine, Russian Imperial Stout mogą mieć wartość 120 lub przekraczać ją według niektórych źródeł. W przypadku pozostałych piw wartości nie powinny przekraczać 120, zatem postanowiono je usunąć.
+
+```{r}
+high_ibu_styles <- c("American IPA", "Imperial IPA", "Double IPA", "American Barleywine", "Russian Imperial Stout")
+
+recipe <- recipe %>%
+  filter(!(IBU > 120 & !Style %in% high_ibu_styles))
+```
+
+Następnie wykonano test Rosnera dla różnych skrajnych wartości:
+```{r}
+recipe_temp <- recipe[recipe$IBU <= 180,]
+rosnerTest(recipe_temp$IBU, k = 10)$all.stats
+```
+Według testu wartości poniżej 180 nie są nietypowe. Kierując się wynikiem testu oraz tym, że typowy zakres na stronie kończy się na 120, jednak istnieje możliwość uzyskania piw z wyższym poziomem goryczy, zdecydowano się pozostawić przepisy z wartością IBU do 180.
+
+```{r}
+recipe <- recipe[recipe$IBU <= 180,]
+```
+
+*Size.L. - Ilość zaparzona według podanego przepisu (l)*
+```{r}
+boxplot(recipe$Size.L.)
+summary(recipe$Size.L.)
+```
+Typowa wielkość wynosi zazwyczaj 5 galonów, czyli około 19l co zgadza się z medianą. Wyrkes i statystyki wskazuje na wartości nietypowe.
+Większe partie zazwyczaj mogą sięgać 60l. Postanowiono wykonać test Rosnera i na jego podstawie wybrać punkt, do którego akceptowana jest zaparzona ilość.
+
+```{r}
+recipe_temp <- recipe[recipe$Size.L. < 75,]
+rosnerTest(recipe_temp$Size.L., k = 10)$all.stats
+```
+
+```{r}
+sum(recipe$Size.L. >= 73) / nrow(recipe)
+recipe <- recipe[recipe$Size.L.<73,]
+summary(recipe$Size.L.)
+```
+
+*BoilSize - Ilość płynu na początku gotowania (l)*
+```{r}
+summary(recipe$BoilSize)
+boxplot(recipe$BoilSize)
+```
+
+```{r}
+summary(recipe$BoilSize/recipe$Size.L.)
+```
+
+Zazwyczaj ten stosunek wynosi mniej więcej od 1,1 do 1,3 - w badanym zbiorze wartości od 1 do 3 kwartyla. 
+
+```{r}
+sum(recipe$BoilSize/recipe$Size.L. > 2)
+```
+
+
+*BoilTime - Czas gotowania (min)*
+```{r}
+summary(recipe$BoilTime)
+boxplot(recipe$BoilTime)
+```
+Zazwyczaj gotuje się 60min. Jednak minimalna wartość to 30min a maksymalna 120/180 min (w zależności od źródła).
+W związku z tym postanowiono usunąć skrajne wartości.
+
+```{r}
+sum(recipe$BoilTime < 30 | recipe$BoilTime > 180)
+recipe <- recipe[recipe$BoilTime >= 30 & recipe$BoilTime <= 180,]
+```
+
+
+*BoilGravity - Ciężar właściwy brzeczki przed zagotowaniem (SG)*
+```{r}
+summary(recipe$BoilGravity)
+boxplot(recipe$BoilGravity)
+```
+Typowy zakres jest od 1,03 do 1,09.
+```{r}
+sum(recipe$BoilGravity<1,03 | recipe$BoilGravity > 1.09)
+```
+Wiele piw odbiega od typowych wartości.
+```{r}
+recipe_temp <- recipe[recipe$BoilGravity < 1.16,]
+rosnerTest(recipe_temp$BoilGravity, k = 10)$all.stats
+```
+Test Rosnera wskazuje jako obserwacje skrajne wartości powyżej 1.15.
+```{r}
+sum(recipe$BoilGravity > 1.15)
+```
+Postanowiono jednak nie usuwać ze zbioru przepisów ze skrajnymi wartościami BoilGravity, ponieważ zmienna ta nie zostanie użyta w badaniu. 
+
+*Efficiency - Wydajność ekstrakcji cukrów (%)*
+```{r}
+summary(recipe$Efficiency)
+```
+Zmienna określająca wydajność ekstrakcji cukrów zawarta jest w dobrym przedziale.
+Test Rosnera nie wskazał wartości skrajnych.
+```{r}
+rosnerTest(recipe$Efficiency, k = 10)$all.stats
+```
+Wniosek: nie ma skrajnych wartości tej zmiennej.
+
+*MashThickness - Ilość wody (l) na kg ziarna*
+```{r}
+summary(recipe$MashThickness)
+rosnerTest(recipe$MashThickness, k = 10)$all.stats
+```
+```{r}
+recipe_temp <- recipe[recipe$MashThickness <= 13,]
+rosnerTest(recipe_temp$MashThickness, k = 10)$all.stats
+```
+Na podstawie testu Rosnera postanowiono usunąć skrajne wartości (powyżej 13).
+```{r}
+recipe <- recipe[recipe$MashThickness <= 13,]
+```
+
+## Wybór zmiennych do badania
+Zmienne w analizie skupień nie muszą być silnie skorelowane, dlatego postanowiono wybrać zmienne, które mogą mieć wpływ na to czy piwo jest górnej czy dolnej fermentacji:  
+* Style - Rodzaj warzenia
+* BrewMethod - Technika warzenia
+* Color - Standardowa metoda referencyjna – jasny do ciemnego, np. 40 = czarny
+* PrimaryTemp - Temperatura na etapie fermentacji (C)
+* OG - Gęstość brzeczki nastawnej (przed rozpoczęciem fermentacji) wyrażona za pomocą gęstości względnej (SG) (ang. Original Gravity - gęstość początkowa)
+* FG - Gęstość brzeczki po zakończonej fermentacji wyrażona za pomocą gęstości względnej (SG) (ang. Final Gravity - gęstość końcowa)
+* ABV - Ilość alkoholu w piwie określona jako procent objętości (ang. Alcohol by Volume)
+* IBU - Międzynarodowa jednostka goryczy
+
+```{r}
+recipe_analysis <- recipe[, c("Style", "BrewMethod", "Color", "PrimaryTemp", "OG", "FG", "ABV", "IBU")]
+```
+
+## Wybór jednostek do badania
+Analiza skupień wymaga przeprowadzenia obliczeń na całym zbiorze danych, co może być czasochłonne i wymagające zasobów obliczeniowych.
+W związku z tym zdecydowano się na analizę skupień przy użyciu metody losowania warstwowego. Przyjęto kryterium, że style piw, które są reprezentatywne dla analizy, powinny mieć liczebność nie mniejszą niż 30 przepisów. Jest to istotne dla zapewnienia odpowiedniej reprezentatywności dla każdego stylu piwa, co umożliwi dokładniejsze zrozumienie ich charakterystyk i ewentualne sprawdzenie czy w przypadku 2 skupień możliwe jest przyporządkowanie stylów piw do kategorii niskiej fermentacji lub wysokiej fermentacji. Aby zapewnić różnorodność i uniknąć przekłamań wynikających z nierówności w liczebności stylów piw wylosowano z każdego stylu po 30 rekordów.
+```{r}
+style2 <- as.data.frame(table(recipe_analysis$Style))
+selected_styles <- style2$Var1[style2$Freq >= 30]
+filtered_recipes <- recipe_analysis[recipe_analysis$Style %in% selected_styles, ]
+filtered_recipes <- filtered_recipes %>%
+  group_by(Style) %>%
+  sample_n(size = 30, replace = FALSE)
+```
+
+# Gotowe dane 
+```{r}
+head(filtered_recipes)
+```
+
