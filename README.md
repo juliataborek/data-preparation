@@ -7,7 +7,9 @@ Project implemented during master's studies, June 2024
 
 ## Files:
 - *projekt.Rmd*
+  
   Rmd file with data preparation to cluster analysis: description of variables, measurement scales, data imputation, extreme value analysis, selection of variables for   study
 
 - *recipeData.csv* & *styleData.csv*
+  
   Files with data
